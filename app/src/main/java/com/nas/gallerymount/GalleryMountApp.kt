@@ -41,7 +41,7 @@ class GalleryMountApp : Application() {
         configStore = ConfigStore(this)
         sessionStore = SessionStore(this)
         toolLocator = ToolLocator(this)
-        configStore.passwordObscurer = RclonePasswordObscurer(toolLocator)
+        configStore.passwordObscurer = RclonePasswordObscurer()
         smbBrowser = SmbBrowser(rootExecutor, toolLocator, configStore)
         deviceProbe = DeviceProbe(rootExecutor)
         mountManager = MountManager(rootExecutor, toolLocator, configStore, deviceProbe)

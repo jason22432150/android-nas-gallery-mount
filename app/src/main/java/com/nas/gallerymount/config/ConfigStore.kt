@@ -66,6 +66,13 @@ class ConfigStore(context: Context) {
         } catch (e: Exception) {
             error("密碼 obscure 失敗：${e.message ?: e.javaClass.simpleName}")
         }
+        // 防呆：不可把含空白／ERROR 的雜訊寫進 pass
+        require(obscuredPass.isEmpty() || obscuredPass.none { it.isWhitespace() }) {
+            "obscure 結果含空白，拒絕寫入 rclone.conf"
+        }
+        require(!obscuredPass.contains("ERROR", ignoreCase = true)) {
+            "obscure 結果異常，拒絕寫入 rclone.conf"
+        }
         val file = rcloneConfigFile()
         val content = buildString {
             appendLine("[${config.remoteName.trim().ifEmpty { "nas" }}]")
