@@ -1,0 +1,266 @@
+package com.nas.gallerymount.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import com.nas.gallerymount.domain.IndexAvailability
+import com.nas.gallerymount.domain.SessionPhase
+import com.nas.gallerymount.domain.SessionUiState
+import com.nas.gallerymount.domain.SmbConfig
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(
+    state: SessionUiState,
+    onConfigChange: (SmbConfig) -> Unit,
+    onSave: () -> Unit,
+    onRecheckRoot: () -> Unit,
+    onTest: () -> Unit,
+    onList: () -> Unit,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val cfg = state.config
+    val rootOk = state.root.available
+    val canRootOps = rootOk && !state.busy
+
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("NAS Gallery Mount") })
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            StatusCard(state)
+
+            Text("Root 授權", style = MaterialTheme.typography.titleMedium)
+            Text(state.root.message)
+            if (state.root.uidLine.isNotBlank()) {
+                Text(state.root.uidLine, style = MaterialTheme.typography.bodySmall)
+            }
+            if (!rootOk) {
+                Text(
+                    "請開啟 Magisk → 超級使用者 → 允許「NAS Gallery Mount」，然後重新檢查。",
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            OutlinedButton(onClick = onRecheckRoot, enabled = !state.busy) {
+                Text("重新檢查 Root / 工具 / 裝置")
+            }
+
+            Text("SMB 連線設定", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                value = cfg.host,
+                onValueChange = { onConfigChange(cfg.copy(host = it)) },
+                label = { Text("主機") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = cfg.port.toString(),
+                onValueChange = { v ->
+                    v.toIntOrNull()?.let { onConfigChange(cfg.copy(port = it)) }
+                },
+                label = { Text("連接埠") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = cfg.username,
+                onValueChange = { onConfigChange(cfg.copy(username = it)) },
+                label = { Text("帳號") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = cfg.password,
+                onValueChange = { onConfigChange(cfg.copy(password = it)) },
+                label = { Text("密碼") },
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = cfg.domain,
+                onValueChange = { onConfigChange(cfg.copy(domain = it)) },
+                label = { Text("網域（可選）") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = cfg.shareName,
+                onValueChange = { onConfigChange(cfg.copy(shareName = it)) },
+                label = { Text("共享名稱") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = cfg.subPath,
+                onValueChange = { onConfigChange(cfg.copy(subPath = it)) },
+                label = { Text("子資料夾") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = cfg.mountPoint,
+                onValueChange = { onConfigChange(cfg.copy(mountPoint = it)) },
+                label = { Text("手機掛載位置") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = cfg.enableGooglePhotosIntegration,
+                    onCheckedChange = {
+                        onConfigChange(cfg.copy(enableGooglePhotosIntegration = it))
+                    },
+                )
+                Text("啟用 Google 相簿整合（MediaProvider bind + 掃描）")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    onConfigChange(cfg.copy(mountPoint = SmbConfig.DEFAULT_TEST_MOUNT))
+                }) { Text("測試目錄") }
+                OutlinedButton(onClick = {
+                    onConfigChange(cfg.copy(mountPoint = SmbConfig.DEFAULT_PROD_MOUNT))
+                }) { Text("正式目錄") }
+            }
+            Button(onClick = onSave, modifier = Modifier.fillMaxWidth()) {
+                Text("儲存設定")
+            }
+
+            Text("來源與掛載", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onTest, enabled = canRootOps) { Text("測試連線") }
+                Button(onClick = onList, enabled = canRootOps) { Text("列出來源") }
+            }
+            if (state.sourceListing.isNotEmpty()) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("來源列表（最多顯示 50 項）")
+                        state.sourceListing.take(50).forEach { line ->
+                            Text(line, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onConnect,
+                    enabled = canRootOps && state.phase !is SessionPhase.Mounted &&
+                        state.phase !is SessionPhase.Unmounting,
+                ) { Text("連線並掃描") }
+                Button(
+                    onClick = onDisconnect,
+                    enabled = !state.busy && (
+                        state.phase is SessionPhase.Mounted ||
+                            state.mount.fuseMounted ||
+                            state.mount.bindMounted
+                        ),
+                ) { Text("斷線") }
+                OutlinedButton(onClick = onRefresh, enabled = !state.busy) {
+                    Text("重新整理狀態")
+                }
+            }
+
+            if (state.busy) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator()
+                    Text(phaseLabel(state.phase))
+                }
+            }
+
+            Text(
+                "掃描範圍：${cfg.mountPoint}\n" +
+                    "若 Google 相簿開啟備份，媒體可能上傳雲端。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun StatusCard(state: SessionUiState) {
+    val availabilityText = when (state.indexAvailability) {
+        IndexAvailability.Available -> "索引：可用"
+        IndexAvailability.UnavailableAfterDisconnect -> "索引：已斷線／檔案不可用（列仍保留）"
+        IndexAvailability.Unknown -> "索引：未知"
+    }
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("狀態：${phaseLabel(state.phase)}", style = MaterialTheme.typography.titleSmall)
+            Text(state.statusMessage)
+            Text("工具：${state.tools.message}")
+            state.probe?.let {
+                Text("裝置：${it.profileName} — ${it.reason}")
+                it.mediaProviderProcess?.let { p -> Text("MediaProvider：$p") }
+            }
+            Text(
+                "掛載：FUSE=${state.mount.fuseMounted} bind=${state.mount.bindMounted} " +
+                    "pid=${state.mount.mediaProviderPid ?: "-"}",
+            )
+            Text(availabilityText)
+            Text(
+                "掃描：發現 ${state.scan.discovered}／提交 ${state.scan.submitted}／" +
+                    "索引 ${state.scan.indexed}／略過 ${state.scan.skipped}／失敗 ${state.scan.failed}",
+            )
+        }
+    }
+}
+
+private fun phaseLabel(phase: SessionPhase): String = when (phase) {
+    SessionPhase.Idle -> "已斷線／閒置"
+    SessionPhase.CheckingRoot -> "檢查 Root"
+    SessionPhase.Ready -> "就緒"
+    SessionPhase.Testing -> "測試連線"
+    SessionPhase.MountingFuse -> "掛載 FUSE"
+    SessionPhase.BindingMediaProvider -> "Bind MediaProvider"
+    SessionPhase.Scanning -> "掃描中"
+    SessionPhase.Mounted -> "已掛載"
+    SessionPhase.Unmounting -> "斷線中"
+    is SessionPhase.Failed -> "失敗（${phase.stage}）"
+}

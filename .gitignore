@@ -1,0 +1,15 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+# 大型原生工具由 scripts/fetch-native-tools.sh 取得，勿提交二進位
+app/src/main/jniLibs/arm64-v8a/*.so
+app/src/main/jniLibs/arm64-v8a/*.sha256
+!app/src/main/jniLibs/arm64-v8a/.gitkeep
