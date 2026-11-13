@@ -43,6 +43,8 @@ class MainActivity : ComponentActivity() {
                     onConnect = viewModel::connect,
                     onDisconnect = viewModel::disconnect,
                     onRefresh = viewModel::refreshStatus,
+                    listShares = viewModel::browseShares,
+                    listDirectories = viewModel::browseDirectories,
                 )
             }
         }

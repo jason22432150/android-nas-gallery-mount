@@ -1,5 +1,10 @@
 package com.nas.gallerymount.ui
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,8 +29,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -33,6 +43,7 @@ import com.nas.gallerymount.domain.IndexAvailability
 import com.nas.gallerymount.domain.SessionPhase
 import com.nas.gallerymount.domain.SessionUiState
 import com.nas.gallerymount.domain.SmbConfig
+import com.nas.gallerymount.util.PrimaryStoragePaths
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,10 +57,35 @@ fun HomeScreen(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
+    listShares: suspend () -> Result<List<String>>,
+    listDirectories: suspend (share: String, subPath: String) -> Result<List<String>>,
 ) {
     val cfg = state.config
     val rootOk = state.root.available
     val canRootOps = rootOk && !state.busy
+    val context = LocalContext.current
+
+    var showSmbPicker by remember { mutableStateOf(false) }
+    var mountPickError by remember { mutableStateOf<String?>(null) }
+
+    val mountTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree(),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        val path = PrimaryStoragePaths.fromTreeUri(uri)
+        if (path == null) {
+            mountPickError = "僅支援內部共用儲存（primary）。請選擇／storage/emulated/0 底下的資料夾。"
+        } else {
+            mountPickError = null
+            onConfigChange(cfg.copy(mountPoint = path))
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -121,35 +157,42 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
-            OutlinedTextField(
-                value = cfg.shareName,
-                onValueChange = { onConfigChange(cfg.copy(shareName = it)) },
-                label = { Text("共享名稱") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
+
+            // 共享 + 子資料夾：以瀏覽選擇，不可手打
+            PathSelectRow(
+                label = "SMB 來源資料夾",
+                value = when {
+                    cfg.shareName.isBlank() -> "尚未選擇"
+                    cfg.subPath.isBlank() -> cfg.shareName
+                    else -> "${cfg.shareName}/${cfg.subPath}"
+                },
+                buttonText = "選擇資料夾",
+                enabled = canRootOps,
+                onClick = { showSmbPicker = true },
             )
-            OutlinedTextField(
-                value = cfg.subPath,
-                onValueChange = { onConfigChange(cfg.copy(subPath = it)) },
-                label = { Text("子資料夾") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
+            Text(
+                "需先填好主機與帳密，並已授權 Root。可從共享往下點選子資料夾。",
+                style = MaterialTheme.typography.bodySmall,
             )
-            OutlinedTextField(
-                value = cfg.mountPoint,
-                onValueChange = { onConfigChange(cfg.copy(mountPoint = it)) },
-                label = { Text("手機掛載位置") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
+
+            // 手機掛載位置：系統資料夾選擇器
+            PathSelectRow(
+                label = "手機掛載位置",
+                value = cfg.mountPoint.ifBlank { "尚未選擇" },
+                buttonText = "選擇資料夾",
+                enabled = !state.busy,
+                onClick = {
+                    mountPickError = null
+                    // 開啟系統資料夾選擇器，預設落在 Pictures
+                    val initial = DocumentsContract.buildTreeDocumentUri(
+                        "com.android.externalstorage.documents",
+                        "primary:Pictures",
+                    )
+                    mountTreeLauncher.launch(initial)
+                },
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(
-                    checked = cfg.enableGooglePhotosIntegration,
-                    onCheckedChange = {
-                        onConfigChange(cfg.copy(enableGooglePhotosIntegration = it))
-                    },
-                )
-                Text("啟用 Google 相簿整合（MediaProvider bind + 掃描）")
+            if (mountPickError != null) {
+                Text(mountPickError!!, color = MaterialTheme.colorScheme.error)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {
@@ -158,6 +201,16 @@ fun HomeScreen(
                 OutlinedButton(onClick = {
                     onConfigChange(cfg.copy(mountPoint = SmbConfig.DEFAULT_PROD_MOUNT))
                 }) { Text("正式目錄") }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = cfg.enableGooglePhotosIntegration,
+                    onCheckedChange = {
+                        onConfigChange(cfg.copy(enableGooglePhotosIntegration = it))
+                    },
+                )
+                Text("啟用 Google 相簿整合（MediaProvider bind + 掃描）")
             }
             Button(onClick = onSave, modifier = Modifier.fillMaxWidth()) {
                 Text("儲存設定")
@@ -214,6 +267,44 @@ fun HomeScreen(
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(24.dp))
+        }
+    }
+
+    if (showSmbPicker) {
+        SmbFolderPickerDialog(
+            initialShare = cfg.shareName,
+            initialSubPath = cfg.subPath,
+            onDismiss = { showSmbPicker = false },
+            onConfirm = { share, sub ->
+                onConfigChange(cfg.copy(shareName = share, subPath = sub))
+                showSmbPicker = false
+            },
+            listShares = listShares,
+            listDirectories = listDirectories,
+        )
+    }
+}
+
+@Composable
+private fun PathSelectRow(
+    label: String,
+    value: String,
+    buttonText: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelLarge)
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            modifier = Modifier.fillMaxWidth(),
+            readOnly = true,
+            singleLine = true,
+            enabled = false,
+        )
+        OutlinedButton(onClick = onClick, enabled = enabled) {
+            Text(buttonText)
         }
     }
 }

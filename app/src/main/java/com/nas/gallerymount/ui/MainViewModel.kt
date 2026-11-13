@@ -37,6 +37,11 @@ class MainViewModel(
 
     fun refreshStatus() = viewModelScope.launch { session.refreshStatus() }
 
+    suspend fun browseShares(): Result<List<String>> = session.browseShares()
+
+    suspend fun browseDirectories(share: String, subPath: String): Result<List<String>> =
+        session.browseDirectories(share, subPath)
+
     class Factory(
         private val session: SessionController,
     ) : ViewModelProvider.Factory {

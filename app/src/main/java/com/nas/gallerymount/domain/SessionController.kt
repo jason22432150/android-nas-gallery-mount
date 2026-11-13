@@ -246,6 +246,32 @@ class SessionController(
         }
     }
 
+    /** 供 SMB 資料夾選擇器：列出共享（不佔用連線／斷線 busy 鎖）。 */
+    suspend fun browseShares(): Result<List<String>> {
+        if (!_state.value.root.available) {
+            return Result.failure(IllegalStateException("請先完成 Root 授權"))
+        }
+        val result = smbBrowser.listShares(_state.value.config)
+        return if (result.ok) {
+            Result.success(result.lines)
+        } else {
+            Result.failure(IllegalStateException(result.message))
+        }
+    }
+
+    /** 供 SMB 資料夾選擇器：列出指定共享下的子目錄。 */
+    suspend fun browseDirectories(share: String, subPath: String): Result<List<String>> {
+        if (!_state.value.root.available) {
+            return Result.failure(IllegalStateException("請先完成 Root 授權"))
+        }
+        val result = smbBrowser.listDirectories(_state.value.config, share, subPath)
+        return if (result.ok) {
+            Result.success(result.lines)
+        } else {
+            Result.failure(IllegalStateException(result.message))
+        }
+    }
+
     private fun fail(stage: String, reason: String) {
         _state.update {
             it.copy(
