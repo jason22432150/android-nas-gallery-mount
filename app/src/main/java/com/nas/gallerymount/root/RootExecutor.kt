@@ -68,20 +68,19 @@ class RootExecutor(
     suspend fun executeInGlobalMountNs(
         vararg argv: String,
         timeoutMs: Long = defaultTimeoutMs,
-    ): ExecResult {
+    ): ExecResult = withContext(Dispatchers.IO) {
         require(argv.isNotEmpty()) { "命令不可為空" }
         val script = buildShellScript(argv)
-        return try {
+        val first = try {
             executeSuScript(script, useGlobalMountNs = true, timeoutMs = timeoutMs)
         } catch (_: Exception) {
             executeSuScript(script, useGlobalMountNs = false, timeoutMs = timeoutMs)
-        }.let { first ->
-            // -M 若被拒但 exit 非 0，再試一次無 -M
-            if (!first.success && first.stderr.contains("-M", ignoreCase = true)) {
-                executeSuScript(script, useGlobalMountNs = false, timeoutMs = timeoutMs)
-            } else {
-                first
-            }
+        }
+        // -M 若被拒但 exit 非 0，再試一次無 -M
+        if (!first.success && first.stderr.contains("-M", ignoreCase = true)) {
+            executeSuScript(script, useGlobalMountNs = false, timeoutMs = timeoutMs)
+        } else {
+            first
         }
     }
 

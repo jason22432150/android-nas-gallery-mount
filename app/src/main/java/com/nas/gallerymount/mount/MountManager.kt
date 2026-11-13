@@ -119,14 +119,9 @@ class MountManager(
         val mountPoint = config.mountPoint.trimEnd('/')
         val mpPath = deviceProbe.toMediaProviderPath(mountPoint)
 
-        // 確認掃描器看得到 rclone 來源路徑
-        val srcCheck = rootExecutor.executeInGlobalMountNs(
-            "/system/bin/grep", "-F", " $mpPath ", "/proc/${provider.pid}/mountinfo",
-            timeoutMs = 10_000L,
-        )
-        // grep 找不到時不一定代表失敗（視圖可能已用另一路徑）；再以 nsenter ls 驗證
+        // 確認掃描器在 /mnt/user/... 視圖看得到 rclone
         val lsSrc = rootExecutor.executeInGlobalMountNs(
-            "nsenter", "-t", provider.pid.toString(), "-m", "--",
+            "/system/bin/nsenter", "-t", provider.pid.toString(), "-m", "--",
             "/system/bin/ls", "-A", mpPath,
             timeoutMs = 15_000L,
         )
@@ -137,46 +132,52 @@ class MountManager(
             )
         }
 
-        // 若目標已 bind 正確來源則重用
+        // 若 /storage/... 在 MediaProvider ns 已是 fuse 則重用
         val existingTarget = rootExecutor.execute(
             "/system/bin/grep", "-F", " $mountPoint ", "/proc/${provider.pid}/mountinfo",
         )
-        if (existingTarget.success && existingTarget.stdout.contains("fuse", ignoreCase = true)) {
-            return ActionResult(
-                ok = true,
-                message = "MediaProvider bind 已存在，重用中",
-                snapshot = MountSnapshot(
-                    fuseMounted = true,
-                    bindMounted = true,
-                    mediaProviderPid = provider.pid,
-                    mountPoint = mountPoint,
-                    remotePath = config.remotePath(),
-                ),
+        val alreadyBound = existingTarget.success &&
+            existingTarget.stdout.contains("fuse", ignoreCase = true)
+        if (!alreadyBound) {
+            val bind = rootExecutor.executeInGlobalMountNs(
+                "/system/bin/nsenter", "-t", provider.pid.toString(), "-m", "--",
+                "/system/bin/mount", "--bind", mpPath, mountPoint,
+                timeoutMs = 20_000L,
             )
+            if (!bind.success) {
+                return ActionResult(false, "bind mount 失敗：${bind.combined()}")
+            }
         }
 
-        val bind = rootExecutor.executeInGlobalMountNs(
-            "nsenter", "-t", provider.pid.toString(), "-m", "--",
-            "/system/bin/mount", "--bind", mpPath, mountPoint,
-            timeoutMs = 20_000L,
+        // 必須在 MediaProvider ns 內對 /storage/... 路徑驗證（這才是掃描器實際用的路徑）
+        val verifyLs = rootExecutor.executeInGlobalMountNs(
+            "/system/bin/nsenter", "-t", provider.pid.toString(), "-m", "--",
+            "/system/bin/ls", "-A", mountPoint,
+            timeoutMs = 15_000L,
         )
-        if (!bind.success) {
-            return ActionResult(false, "bind mount 失敗：${bind.combined()}")
-        }
-
-        val verifyLs = rootExecutor.execute(
-            "/system/bin/ls", "-A", "/proc/${provider.pid}/root$mountPoint",
-        )
-        if (!verifyLs.success) {
+        if (!verifyLs.success || verifyLs.stdout.trim().isEmpty()) {
             return ActionResult(
                 false,
-                "bind 後無法驗證 MediaProvider 視圖：$mountPoint — ${verifyLs.combined()}",
+                "bind 後 MediaProvider 的 $mountPoint 仍為空：" +
+                    verifyLs.combined().ifBlank { "（無輸出）" },
+            )
+        }
+        val mi = rootExecutor.execute(
+            "/system/bin/grep", "-F", " $mountPoint ", "/proc/${provider.pid}/mountinfo",
+        )
+        if (!mi.success || !mi.stdout.contains("fuse", ignoreCase = true)) {
+            return ActionResult(
+                false,
+                "bind 後 mountinfo 未見 fuse 於 $mountPoint",
             )
         }
         return ActionResult(
             ok = true,
-            message = "MediaProvider bind 完成" +
-                if (srcCheck.success) "" else "（來源 mountinfo 行未匹配，但 ls 成功）",
+            message = if (alreadyBound) {
+                "MediaProvider bind 已存在，重用中"
+            } else {
+                "MediaProvider bind 完成（掃描器可見 ${verifyLs.stdout.lines().size} 項）"
+            },
             snapshot = MountSnapshot(
                 fuseMounted = true,
                 bindMounted = true,
@@ -196,7 +197,7 @@ class MountManager(
         val pid = provider?.pid ?: previousPid
         if (pid != null) {
             val umountBind = rootExecutor.executeInGlobalMountNs(
-                "nsenter", "-t", pid.toString(), "-m", "--",
+                "/system/bin/nsenter", "-t", pid.toString(), "-m", "--",
                 "/system/bin/umount", mountPoint,
                 timeoutMs = 20_000L,
             )

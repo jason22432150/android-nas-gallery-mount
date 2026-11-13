@@ -45,7 +45,7 @@ class GalleryMountApp : Application() {
         smbBrowser = SmbBrowser(rootExecutor, toolLocator, configStore)
         deviceProbe = DeviceProbe(rootExecutor)
         mountManager = MountManager(rootExecutor, toolLocator, configStore, deviceProbe)
-        mediaIndexer = MediaIndexer(this)
+        mediaIndexer = MediaIndexer(this, rootExecutor)
         sessionController = SessionController(
             rootExecutor = rootExecutor,
             configStore = configStore,

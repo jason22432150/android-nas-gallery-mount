@@ -5,6 +5,7 @@ import android.media.MediaScannerConnection
 import android.net.Uri
 import android.provider.MediaStore
 import com.nas.gallerymount.domain.ScanProgress
+import com.nas.gallerymount.root.RootExecutor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -13,9 +14,13 @@ import kotlin.coroutines.resume
 
 /**
  * 有界批次媒體掃描；尊重 .nomedia；不刪除 MediaStore 列。
+ *
+ * 檔案發現必須走 Root `find`：App 程序受 Scoped Storage 限制，
+ * 對 `/storage/emulated/0/DCIM/...` 的 `File.listFiles()` 常為 Permission denied／空結果。
  */
 class MediaIndexer(
     context: Context,
+    private val rootExecutor: RootExecutor,
 ) {
     private val appContext = context.applicationContext
 
@@ -41,31 +46,34 @@ class MediaIndexer(
         onProgress: (ScanProgress) -> Unit = {},
     ): ScanResult = withContext(Dispatchers.IO) {
         allowSubmitting()
-        val root = File(mountPoint)
-        if (!root.exists()) {
-            val p = ScanProgress(message = "掛載點不存在")
+        val rootPath = mountPoint.trimEnd('/')
+
+        onProgress(ScanProgress(message = "以 Root 列舉媒體檔（上限 $maxFiles）…"))
+        val discoveredPaths = discoverMediaViaRoot(rootPath, maxFiles)
+        if (discoveredPaths.isFailure) {
+            val err = discoveredPaths.exceptionOrNull()?.message ?: "列舉失敗"
+            val p = ScanProgress(message = err)
             onProgress(p)
-            return@withContext ScanResult(p, relativePathOf(mountPoint))
+            return@withContext ScanResult(p, relativePathOf(rootPath))
         }
 
-        var discovered = 0
+        val files = discoveredPaths.getOrDefault(emptyList())
+        val discovered = files.size
         var submitted = 0
         var indexed = 0
-        var skipped = 0
         var failed = 0
-
-        val files = mutableListOf<File>()
-        collectMediaFiles(root, files, maxFiles) { skipped++ }
-        discovered = files.size
 
         var progress = ScanProgress(
             discovered = discovered,
-            skipped = skipped,
-            message = "發現 $discovered 個媒體檔，開始提交掃描",
+            message = if (discovered == 0) {
+                "Root 列舉結果為 0。請確認掛載點有媒體，且 MediaProvider bind 已完成。"
+            } else {
+                "發現 $discovered 個媒體檔，開始提交掃描"
+            },
         )
         onProgress(progress)
 
-        for (file in files) {
+        for (path in files) {
             if (!submitEnabled) {
                 progress = progress.copy(
                     message = "已停止提交新掃描（Android 可能仍處理已提交項目）",
@@ -73,12 +81,9 @@ class MediaIndexer(
                 onProgress(progress)
                 break
             }
-            val ok = scanFileAwait(file.absolutePath)
+            val ok = scanFileAwait(path)
             if (ok) {
                 submitted++
-                if (isIndexed(file)) indexed++ else {
-                    // 掃描回呼成功但查詢可能因權限延遲；先計 submitted
-                }
             } else {
                 failed++
             }
@@ -86,15 +91,24 @@ class MediaIndexer(
                 discovered = discovered,
                 submitted = submitted,
                 indexed = indexed,
-                skipped = skipped,
                 failed = failed,
                 message = "掃描中：$submitted / $discovered",
             )
             onProgress(progress)
         }
 
-        // 再查一次 MediaStore 計數
-        val prefix = relativePathOf(mountPoint)
+        // 目錄級掃描備援（部分 ROM 對整樹較有效）
+        if (discovered > 0) {
+            rootExecutor.execute(
+                "content", "call",
+                "--uri", "content://media",
+                "--method", "scan_file",
+                "--arg", rootPath,
+                timeoutMs = 120_000L,
+            )
+        }
+
+        val prefix = relativePathOf(rootPath)
         indexed = countIndexed(prefix)
         val cappedNote = if (discovered >= maxFiles) {
             "（已達上限 $maxFiles，其餘未提交）"
@@ -105,12 +119,48 @@ class MediaIndexer(
             discovered = discovered,
             submitted = submitted,
             indexed = indexed,
-            skipped = skipped,
             failed = failed,
             message = "掃描結束：MediaStore 約 $indexed 筆（relative_path LIKE '$prefix%'）$cappedNote",
         )
         onProgress(progress)
         ScanResult(progress, prefix)
+    }
+
+    /**
+     * 以 Root find 發現媒體路徑（避開 App Scoped Storage）。
+     */
+    private suspend fun discoverMediaViaRoot(
+        mountPoint: String,
+        maxFiles: Int,
+    ): Result<List<String>> {
+        // 路徑已由掛載白名單驗證；此處再拒單引號以免破壞 sh -c
+        if (mountPoint.contains('\'')) {
+            return Result.failure(IllegalArgumentException("掛載路徑不可含單引號"))
+        }
+        val nameTests = MEDIA_EXT.joinToString(" -o ") { ext ->
+            "-iname '*${ext.lowercase()}'"
+        }
+        // Immich 結構約 mount/uuid/xx/yy/file，限制深度避免整庫拖死
+        val script = buildString {
+            append("/system/bin/find '$mountPoint' -maxdepth 6 ")
+            append("\\( -name '.nomedia' -prune \\) -o ")
+            append("\\( -type f \\( $nameTests \\) -print \\) ")
+            append("2>/dev/null | /system/bin/head -n $maxFiles")
+        }
+        val result = rootExecutor.execute(
+            "/system/bin/sh", "-c", script,
+            timeoutMs = 180_000L,
+        )
+        if (!result.success && result.stdout.isBlank()) {
+            return Result.failure(
+                IllegalStateException("Root find 失敗：${result.combined()}"),
+            )
+        }
+        val paths = result.stdout.lines()
+            .map { it.trim() }
+            .filter { it.startsWith(mountPoint) && File(it).name.isNotEmpty() }
+            .distinct()
+        return Result.success(paths)
     }
 
     fun countIndexed(relativePathPrefix: String): Int {
@@ -154,29 +204,6 @@ class MediaIndexer(
         }
     }
 
-    private fun isIndexed(file: File): Boolean {
-        val rel = relativePathOf(file.parent ?: return false)
-        // 簡化：以路徑字首計數變化較重；此處用 display name 查一次
-        return try {
-            appContext.contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                arrayOf(MediaStore.MediaColumns._ID),
-                "${MediaStore.MediaColumns.DISPLAY_NAME}=?",
-                arrayOf(file.name),
-                null,
-            )?.use { it.count > 0 } == true ||
-                appContext.contentResolver.query(
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                    arrayOf(MediaStore.MediaColumns._ID),
-                    "${MediaStore.MediaColumns.DISPLAY_NAME}=?",
-                    arrayOf(file.name),
-                    null,
-                )?.use { it.count > 0 } == true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     private suspend fun scanFileAwait(path: String): Boolean =
         suspendCancellableCoroutine { cont ->
             MediaScannerConnection.scanFile(
@@ -187,35 +214,6 @@ class MediaIndexer(
                 if (cont.isActive) cont.resume(uri != null)
             }
         }
-
-    private fun collectMediaFiles(
-        dir: File,
-        out: MutableList<File>,
-        maxFiles: Int,
-        onSkip: () -> Unit,
-    ) {
-        if (out.size >= maxFiles) return
-        if (!dir.isDirectory) return
-        val children = dir.listFiles() ?: return
-        // 尊重 .nomedia：此目錄及其子樹略過
-        if (children.any { it.name == ".nomedia" }) {
-            onSkip()
-            return
-        }
-        for (child in children.sortedBy { it.name }) {
-            if (out.size >= maxFiles) return
-            when {
-                child.isDirectory -> collectMediaFiles(child, out, maxFiles, onSkip)
-                child.isFile && isMediaFile(child) -> out += child
-                else -> onSkip()
-            }
-        }
-    }
-
-    private fun isMediaFile(file: File): Boolean {
-        val name = file.name.lowercase()
-        return MEDIA_EXT.any { name.endsWith(it) }
-    }
 
     fun relativePathOf(absolutePath: String): String {
         val prefix = "/storage/emulated/0/"
