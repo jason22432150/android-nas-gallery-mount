@@ -19,7 +19,7 @@ class SmbBrowser(
     )
 
     suspend fun testConnection(config: SmbConfig): BrowseResult {
-        configStore.save(config)
+        prepareConfig(config).onFailure { return BrowseResult(false, emptyList(), it.message ?: "設定失敗") }
         val rclone = toolLocator.rclonePath()
             ?: return BrowseResult(false, emptyList(), "rclone 工具不存在")
         val conf = configStore.rcloneConfigFile().absolutePath
@@ -36,14 +36,14 @@ class SmbBrowser(
             if (config.shareName.isNotBlank()) {
                 return listPath(config, maxDepth = 1)
             }
-            return BrowseResult(false, emptyList(), "測連線失敗：${result.combined()}")
+            return BrowseResult(false, emptyList(), "測連線失敗：${sanitizeRcloneError(result.combined())}")
         }
         val lines = result.stdout.lines().map { it.trim() }.filter { it.isNotEmpty() }
         return BrowseResult(true, lines, "連線成功，已列出共享／目錄")
     }
 
     suspend fun listPath(config: SmbConfig, maxDepth: Int = 1): BrowseResult {
-        configStore.save(config)
+        prepareConfig(config).onFailure { return BrowseResult(false, emptyList(), it.message ?: "設定失敗") }
         val rclone = toolLocator.rclonePath()
             ?: return BrowseResult(false, emptyList(), "rclone 工具不存在")
         val conf = configStore.rcloneConfigFile().absolutePath
@@ -57,7 +57,7 @@ class SmbBrowser(
             timeoutMs = 90_000L,
         )
         if (!result.success) {
-            return BrowseResult(false, emptyList(), "列出來源失敗：${result.combined()}")
+            return BrowseResult(false, emptyList(), "列出來源失敗：${sanitizeRcloneError(result.combined())}")
         }
         val lines = result.stdout.lines().map { it.trim() }.filter { it.isNotEmpty() }
         return BrowseResult(true, lines, "來源可讀，共 ${lines.size} 項")
@@ -68,7 +68,7 @@ class SmbBrowser(
      * 輸出解析為共享／頂層目錄名稱列表。
      */
     suspend fun listShares(config: SmbConfig): BrowseResult {
-        configStore.save(config)
+        prepareConfig(config).onFailure { return BrowseResult(false, emptyList(), it.message ?: "設定失敗") }
         val rclone = toolLocator.rclonePath()
             ?: return BrowseResult(false, emptyList(), "rclone 工具不存在")
         val conf = configStore.rcloneConfigFile().absolutePath
@@ -81,7 +81,7 @@ class SmbBrowser(
             timeoutMs = 45_000L,
         )
         if (!result.success) {
-            return BrowseResult(false, emptyList(), "無法列舉共享：${result.combined()}")
+            return BrowseResult(false, emptyList(), "無法列舉共享：${sanitizeRcloneError(result.combined())}")
         }
         // lsd 格式：約「          -1 2024-01-01 00:00:00        -1 name」
         val names = result.stdout.lines()
@@ -106,7 +106,7 @@ class SmbBrowser(
         if (trimmedShare.isEmpty()) {
             return listShares(config)
         }
-        configStore.save(config)
+        prepareConfig(config).onFailure { return BrowseResult(false, emptyList(), it.message ?: "設定失敗") }
         val rclone = toolLocator.rclonePath()
             ?: return BrowseResult(false, emptyList(), "rclone 工具不存在")
         val conf = configStore.rcloneConfigFile().absolutePath
@@ -126,7 +126,7 @@ class SmbBrowser(
             timeoutMs = 90_000L,
         )
         if (!result.success) {
-            return BrowseResult(false, emptyList(), "無法列出資料夾：${result.combined()}")
+            return BrowseResult(false, emptyList(), "無法列出資料夾：${sanitizeRcloneError(result.combined())}")
         }
         val dirs = result.stdout.lines()
             .map { it.trim().trimEnd('/') }
@@ -134,5 +134,23 @@ class SmbBrowser(
             .map { it.substringAfterLast('/') }
             .distinct()
         return BrowseResult(true, dirs, "共 ${dirs.size} 個子資料夾")
+    }
+
+    private fun prepareConfig(config: SmbConfig): Result<Unit> = runCatching {
+        configStore.save(config)
+    }.recoverCatching { e ->
+        throw IllegalStateException(e.message ?: "寫入 rclone.conf 失敗")
+    }
+
+    /** 縮短 rclone 錯誤並標出常見的密碼 obscure 問題。 */
+    private fun sanitizeRcloneError(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.contains("base64 decode failed", ignoreCase = true) ||
+            trimmed.contains("is it obscured", ignoreCase = true)
+        ) {
+            return "密碼格式錯誤：rclone.conf 需要 obscure 後的密碼。請重新儲存設定後再試。"
+        }
+        // 對話框空間有限，只取最後幾行
+        return trimmed.lines().takeLast(4).joinToString("\n")
     }
 }

@@ -5,11 +5,12 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.nas.gallerymount.domain.SmbConfig
+import com.nas.gallerymount.mount.RclonePasswordObscurer
 import java.io.File
 
 /**
  * 持久化 SMB 設定；密碼放在 EncryptedSharedPreferences。
- * 並在 App 私有目錄維護 rclone.conf（權限 0600）。
+ * 並在 App 私有目錄維護 rclone.conf（權限 0600；pass 為 rclone obscure 值）。
  */
 class ConfigStore(context: Context) {
     private val appContext = context.applicationContext
@@ -18,6 +19,9 @@ class ConfigStore(context: Context) {
         private set
     private val prefs: SharedPreferences = createPrefs(appContext)
     private val configDir: File = File(appContext.filesDir, "rclone").also { it.mkdirs() }
+
+    /** 由 Application 在 ToolLocator 建立後注入。 */
+    var passwordObscurer: RclonePasswordObscurer? = null
 
     fun load(): SmbConfig = SmbConfig(
         remoteName = prefs.getString(KEY_REMOTE, "nas") ?: "nas",
@@ -52,10 +56,16 @@ class ConfigStore(context: Context) {
     fun rcloneConfigFile(): File = File(configDir, "rclone.conf")
 
     /**
-     * 寫入 rclone SMB remote。obscure 密碼交由呼叫端以 rclone obscure 處理時可再強化；
-     * 此處使用 plain pass（檔案在私有目錄 + 0600），避免把密碼放進命令列。
+     * 寫入 rclone SMB remote。`pass` 必須為 rclone obscure 後的值，不可寫明文。
      */
     fun writeRcloneConf(config: SmbConfig) {
+        val obscurer = passwordObscurer
+            ?: error("尚未注入 RclonePasswordObscurer，無法寫入 rclone.conf")
+        val obscuredPass = try {
+            obscurer.obscure(config.password)
+        } catch (e: Exception) {
+            error("密碼 obscure 失敗：${e.message ?: e.javaClass.simpleName}")
+        }
         val file = rcloneConfigFile()
         val content = buildString {
             appendLine("[${config.remoteName.trim().ifEmpty { "nas" }}]")
@@ -63,7 +73,7 @@ class ConfigStore(context: Context) {
             appendLine("host = ${config.host.trim()}")
             appendLine("port = ${config.port}")
             appendLine("user = ${config.username}")
-            appendLine("pass = ${config.password}")
+            appendLine("pass = $obscuredPass")
             if (config.domain.isNotBlank()) {
                 appendLine("domain = ${config.domain}")
             }

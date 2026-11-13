@@ -43,8 +43,14 @@ class SessionController(
     }
 
     fun persistConfig() {
-        configStore.save(_state.value.config)
-        _state.update { it.copy(statusMessage = "設定已儲存") }
+        try {
+            configStore.save(_state.value.config)
+            _state.update { it.copy(statusMessage = "設定已儲存（rclone 密碼已 obscure）") }
+        } catch (e: Exception) {
+            _state.update {
+                it.copy(statusMessage = "儲存失敗：${e.message ?: e.javaClass.simpleName}")
+            }
+        }
     }
 
     suspend fun refreshRootAndTools() {
