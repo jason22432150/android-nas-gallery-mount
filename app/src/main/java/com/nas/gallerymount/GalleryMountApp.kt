@@ -6,6 +6,7 @@ import com.nas.gallerymount.config.SessionStore
 import com.nas.gallerymount.domain.SessionController
 import com.nas.gallerymount.media.MediaIndexer
 import com.nas.gallerymount.mount.MountManager
+import com.nas.gallerymount.mount.NativeBinBootstrap
 import com.nas.gallerymount.mount.RclonePasswordObscurer
 import com.nas.gallerymount.mount.SmbBrowser
 import com.nas.gallerymount.mount.ToolLocator
@@ -42,9 +43,13 @@ class GalleryMountApp : Application() {
         sessionStore = SessionStore(this)
         toolLocator = ToolLocator(this)
         configStore.passwordObscurer = RclonePasswordObscurer()
+        val nativeBinBootstrap = NativeBinBootstrap(this, toolLocator)
+        nativeBinBootstrap.ensure()
         smbBrowser = SmbBrowser(rootExecutor, toolLocator, configStore)
         deviceProbe = DeviceProbe(rootExecutor)
-        mountManager = MountManager(rootExecutor, toolLocator, configStore, deviceProbe)
+        mountManager = MountManager(
+            rootExecutor, toolLocator, configStore, deviceProbe, nativeBinBootstrap,
+        )
         mediaIndexer = MediaIndexer(this, rootExecutor)
         sessionController = SessionController(
             rootExecutor = rootExecutor,

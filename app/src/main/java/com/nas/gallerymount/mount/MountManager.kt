@@ -16,6 +16,7 @@ class MountManager(
     private val toolLocator: ToolLocator,
     private val configStore: ConfigStore,
     private val deviceProbe: DeviceProbe,
+    private val nativeBinBootstrap: NativeBinBootstrap,
 ) {
     data class ActionResult(
         val ok: Boolean,
@@ -74,14 +75,18 @@ class MountManager(
             return ActionResult(false, "無法建立掛載點：${mkdir.combined()}")
         }
 
+        nativeBinBootstrap.ensure()?.let {
+            return ActionResult(false, "原生工具準備失敗：$it")
+        }
         // Android toybox 的 env 無法正確帶多個 VAR= 後接命令，會誤呼叫系統 mount。
-        // 改用 sh -c + export，確保執行的是 librclone.so。
-        val binDir = File(fuseBin).parent ?: return ActionResult(false, "工具目錄無效")
+        // PATH 需含 native-bin/fusermount3（非 libfusermount3.so 檔名）。
+        val libDir = File(fuseBin).parent ?: return ActionResult(false, "工具目錄無效")
+        val pathDir = nativeBinBootstrap.binDir().absolutePath
         val mountScript = buildString {
             append("export PATH=")
-            append(RootExecutor.shellQuote("$binDir:/system/bin:/system/xbin"))
+            append(RootExecutor.shellQuote("$pathDir:$libDir:/system/bin:/system/xbin"))
             append("; export LD_LIBRARY_PATH=")
-            append(RootExecutor.shellQuote(binDir))
+            append(RootExecutor.shellQuote(libDir))
             append("; export HOME=")
             append(RootExecutor.shellQuote(File(conf).parent ?: "/data/local/tmp"))
             append("; exec ")
@@ -232,12 +237,17 @@ class MountManager(
         // 2) fusermount3 -u
         val fuseBin = toolLocator.fusermountPath()
         if (fuseBin != null) {
+            nativeBinBootstrap.ensure()
             val libDir = File(fuseBin).parent ?: "/system/bin"
+            val pathDir = nativeBinBootstrap.binDir().absolutePath
+            val fuseCmd = File(pathDir, "fusermount3").takeIf { it.exists() }?.absolutePath ?: fuseBin
             val umountScript = buildString {
-                append("export LD_LIBRARY_PATH=")
+                append("export PATH=")
+                append(RootExecutor.shellQuote("$pathDir:/system/bin"))
+                append("; export LD_LIBRARY_PATH=")
                 append(RootExecutor.shellQuote(libDir))
                 append("; exec ")
-                append(RootExecutor.shellQuote(fuseBin))
+                append(RootExecutor.shellQuote(fuseCmd))
                 append(" -u ")
                 append(RootExecutor.shellQuote(mountPoint))
             }
