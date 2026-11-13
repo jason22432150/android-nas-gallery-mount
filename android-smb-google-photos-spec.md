@@ -35,11 +35,11 @@ App 僅支援已 Root 且已授權本 App 使用 Root 的 Android 裝置。首�
 | USB 與 Root | ADB USB 正常。Magisk 授權 Shell 後，su -c id 回傳 uid=0(root)，SELinux 為 Enforcing。正式 App 的套件需在 Magisk 另外授權。 |
 | 核心 | 4.9.337-perf-g8aab452e4acd。核心設定有 `# CONFIG_NETWORK_FILESYSTEMS is not set`，檔案系統清單無 CIFS。 |
 | FUSE | Magisk Root 可開啟 /dev/fuse。Termux 的 rclone v1.74.3-termux 搭配 fusermount3 3.16.2 通過本機唯讀掛載及讀取。 |
-| SMB | SMB 來源為 nas:raid/data/immich/UPLOAD/upload。主機為 100.69.221.57。正式掛載點為 /storage/emulated/0/DCIM/Camera/smb。範例設定檔不含帳密。 |
+| SMB | SMB 來源為 `nas:<share>/<media-subpath>`（範例佔位，非真實路徑）。主機為 `<SMB_HOST>`（可為 VPN／Tailscale 位址）。正式掛載點為 /storage/emulated/0/DCIM/Camera/smb。範例設定檔不含帳密。 |
 | 一般 App 視圖 | 一般 ADB Shell 可以列出正式掛載，Google 相簿程序的掛載表也看得到。 |
 | MediaProvider 視圖 | 原始掛載時，掃描器的 /storage/emulated/0/DCIM/Camera/smb 是空目錄。同一程序可從 /mnt/user/0/emulated/0/DCIM/Camera/smb 看到 rclone 檔案。 |
 | 單張測試 | 以檔案 bind mount 對齊兩個視圖，掃描後取得 MediaStore 圖片索引。媒體 URI 前 4 KB 與 SMB 原檔雜湊一致，使用者確認 Google 相簿可開啟。 |
-| 小資料夾測試 | 唯讀 bind mount 整個 Immich 子資料夾到 Pictures/SMBFolderTest.RBaUpJ。內有 1 張 JPG，成功索引並核對 URI 資料，使用者確認可開啟。 |
+| 小資料夾測試 | 唯讀 bind mount 測試子資料夾到 Pictures/SMBFolderTest。內有 1 張 JPG，成功索引並核對 URI 資料，使用者確認可開啟。 |
 | 正式目錄 | 對 MediaProvider 加入整目錄 bind mount 後發起掃描。中途查到 32 張照片、3 段影片。最終數量、Google 相簿的正式目錄顯示、影片播放與雲端備份均未確認。 |
 
 使用者後來要求停止 ADB 操作。停止了後續查詢，先前已提交給 MediaProvider 的掃描是否完成或取消未知。接手開發時，等使用者另行授權才重新連線。以上掛載及索引可能因程序重啟或手機重開機而改變。
@@ -80,11 +80,11 @@ rclone config
 - 第二、三行啟用 Root 工具套件庫並更新索引。
 - 第四行安裝內含 fusermount3 的 libfuse3。
 - 接下來三行驗證二進位可執行及掛載指令存在。
-- 最後一行開啟互動式設定。連線名稱填 nas，後端選 smb，host 填 100.69.221.57，port 預設 445，依伺服器填帳號、密碼及網域。如果該位址要透過 Tailscale 存取，手機也要連到能路由該位址的網路。
+- 最後一行開啟互動式設定。連線名稱填 nas，後端選 smb，host 填 `<SMB_HOST>`，port 預設 445，依伺服器填帳號、密碼及網域。如果該位址要透過 Tailscale 或其他 VPN 存取，手機也要連到能路由該位址的網路。
 
 ```sh
 rclone lsd nas:
-rclone lsf 'nas:raid/data/immich/UPLOAD/upload' --max-depth 1
+rclone lsf 'nas:<share>/<media-subpath>' --max-depth 1
 rclone config file
 ```
 
@@ -102,7 +102,7 @@ rclone config file
 B=/data/data/com.termux/files/usr/bin
 export PATH="/system/bin:$B:$PATH"
 D=/storage/emulated/0/DCIM/Camera/smb
-S=nas:raid/data/immich/UPLOAD/upload
+S=nas:<share>/<media-subpath>
 C=/data/data/com.termux/files/home/.config/rclone/rclone.conf
 /system/bin/mkdir -p "$D"
 "$B/rclone" mount "$S" "$D" --config "$C" --read-only --allow-other \

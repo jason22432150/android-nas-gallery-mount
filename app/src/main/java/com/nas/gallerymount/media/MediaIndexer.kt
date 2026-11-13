@@ -173,7 +173,7 @@ class MediaIndexer(
         val nameTests = MEDIA_EXT.joinToString(" -o ") { ext ->
             "-iname '*${ext.lowercase()}'"
         }
-        // Immich 結構約 mount/uuid/xx/yy/file，限制深度避免整庫拖死
+        // 深層媒體庫常為多層 hash／uuid 目錄，限制深度避免整庫拖死
         val script = buildString {
             append("/system/bin/find '$mountPoint' -maxdepth 6 ")
             append("\\( -name '.nomedia' -prune \\) -o ")
