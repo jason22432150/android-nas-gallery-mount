@@ -1,6 +1,7 @@
 package com.nas.gallerymount.root
 
 import com.nas.gallerymount.domain.RootStatus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -50,6 +51,8 @@ class RootExecutor(
                     "Root 未授權或逾時。請到 Magisk「超級使用者」允許本 App，再按重新檢查。"
                 },
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             RootStatus(
                 available = false,

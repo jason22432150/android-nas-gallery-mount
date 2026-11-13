@@ -67,6 +67,11 @@ class SessionController(
             )
             else -> SessionPhase.Ready
         }
+        val encryptWarn = if (configStore.usingFallbackPrefs) {
+            "警告：加密儲存不可用，設定以未加密私有 prefs 保存。"
+        } else {
+            ""
+        }
         _state.update {
             it.copy(
                 phase = phase,
@@ -74,11 +79,14 @@ class SessionController(
                 tools = tools,
                 probe = probe,
                 busy = false,
-                statusMessage = when (phase) {
-                    is SessionPhase.Ready -> "就緒"
-                    is SessionPhase.Failed -> phase.reason
-                    else -> it.statusMessage
-                },
+                statusMessage = listOf(
+                    when (phase) {
+                        is SessionPhase.Ready -> "就緒"
+                        is SessionPhase.Failed -> phase.reason
+                        else -> it.statusMessage
+                    },
+                    encryptWarn,
+                ).filter { msg -> msg.isNotBlank() }.joinToString(" "),
             )
         }
     }

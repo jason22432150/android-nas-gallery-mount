@@ -167,8 +167,14 @@ class MountManager(
         val verifyLs = rootExecutor.execute(
             "/system/bin/ls", "-A", "/proc/${provider.pid}/root$mountPoint",
         )
+        if (!verifyLs.success) {
+            return ActionResult(
+                false,
+                "bind 後無法驗證 MediaProvider 視圖：$mountPoint — ${verifyLs.combined()}",
+            )
+        }
         return ActionResult(
-            ok = verifyLs.success || true,
+            ok = true,
             message = "MediaProvider bind 完成" +
                 if (srcCheck.success) "" else "（來源 mountinfo 行未匹配，但 ls 成功）",
             snapshot = MountSnapshot(

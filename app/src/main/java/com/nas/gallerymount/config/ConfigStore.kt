@@ -13,6 +13,9 @@ import java.io.File
  */
 class ConfigStore(context: Context) {
     private val appContext = context.applicationContext
+    /** Keystore 不可用時會降級為未加密 prefs；UI 應顯示警告。 */
+    var usingFallbackPrefs: Boolean = false
+        private set
     private val prefs: SharedPreferences = createPrefs(appContext)
     private val configDir: File = File(appContext.filesDir, "rclone").also { it.mkdirs() }
 
@@ -89,7 +92,8 @@ class ConfigStore(context: Context) {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
             )
         } catch (_: Exception) {
-            // 模擬器／測試環境若 Keystore 異常，退回一般私有 prefs（仍不進 log）
+            // Keystore 異常時退回私有 prefs，並標記供 UI 警告（仍不進 log）
+            usingFallbackPrefs = true
             context.getSharedPreferences(PREFS_FALLBACK, Context.MODE_PRIVATE)
         }
     }

@@ -96,13 +96,18 @@ class MediaIndexer(
         // 再查一次 MediaStore 計數
         val prefix = relativePathOf(mountPoint)
         indexed = countIndexed(prefix)
+        val cappedNote = if (discovered >= maxFiles) {
+            "（已達上限 $maxFiles，其餘未提交）"
+        } else {
+            ""
+        }
         progress = ScanProgress(
             discovered = discovered,
             submitted = submitted,
             indexed = indexed,
             skipped = skipped,
             failed = failed,
-            message = "掃描結束：MediaStore 約 $indexed 筆（relative_path LIKE '$prefix%'）",
+            message = "掃描結束：MediaStore 約 $indexed 筆（relative_path LIKE '$prefix%'）$cappedNote",
         )
         onProgress(progress)
         ScanResult(progress, prefix)
