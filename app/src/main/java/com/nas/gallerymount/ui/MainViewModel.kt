@@ -47,6 +47,9 @@ class MainViewModel(
 
     fun cancelScan() = session.cancelScan()
 
+    /** 清除本掛載點 MediaStore 索引（Google 相簿本地清單） */
+    fun clearMediaIndex() = viewModelScope.launch { session.clearMediaIndex() }
+
     fun toggleShowLogs() = session.toggleShowLogs()
 
     fun clearLogs() = AppLogger.clear()

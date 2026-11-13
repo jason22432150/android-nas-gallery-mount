@@ -29,11 +29,12 @@
             </intent-filter>
         </activity>
 
-        <!-- ADB／自動化指令入口（對應 UI 按鈕，無需截圖點擊） -->
+        <!-- ADB／自動化指令入口；DUMP 權限限制為 shell／系統可觸發 -->
         <receiver
             android:name=".debug.CommandReceiver"
             android:exported="true"
-            android:enabled="true">
+            android:enabled="true"
+            android:permission="android.permission.DUMP">
             <intent-filter>
                 <action android:name="com.nas.gallerymount.cmd.RECHECK" />
                 <action android:name="com.nas.gallerymount.cmd.SAVE" />
@@ -43,6 +44,7 @@
                 <action android:name="com.nas.gallerymount.cmd.DISCONNECT" />
                 <action android:name="com.nas.gallerymount.cmd.REFRESH" />
                 <action android:name="com.nas.gallerymount.cmd.CANCEL_SCAN" />
+                <action android:name="com.nas.gallerymount.cmd.CLEAR_INDEX" />
                 <action android:name="com.nas.gallerymount.cmd.DUMP_STATUS" />
                 <action android:name="com.nas.gallerymount.cmd.DUMP_LOGS" />
                 <action android:name="com.nas.gallerymount.cmd.CLEAR_LOGS" />

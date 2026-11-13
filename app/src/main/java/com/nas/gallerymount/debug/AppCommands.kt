@@ -20,6 +20,7 @@ object AppCommands {
     const val ACTION_DISCONNECT = "com.nas.gallerymount.cmd.DISCONNECT"
     const val ACTION_REFRESH = "com.nas.gallerymount.cmd.REFRESH"
     const val ACTION_CANCEL_SCAN = "com.nas.gallerymount.cmd.CANCEL_SCAN"
+    const val ACTION_CLEAR_INDEX = "com.nas.gallerymount.cmd.CLEAR_INDEX"
     const val ACTION_DUMP_STATUS = "com.nas.gallerymount.cmd.DUMP_STATUS"
     const val ACTION_DUMP_LOGS = "com.nas.gallerymount.cmd.DUMP_LOGS"
     const val ACTION_CLEAR_LOGS = "com.nas.gallerymount.cmd.CLEAR_LOGS"

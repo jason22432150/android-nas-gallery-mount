@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
                     onDisconnect = viewModel::disconnect,
                     onRefresh = viewModel::refreshStatus,
                     onCancelScan = viewModel::cancelScan,
+                    onClearMediaIndex = viewModel::clearMediaIndex,
                     onToggleLogs = viewModel::toggleShowLogs,
                     onClearLogs = viewModel::clearLogs,
                     listShares = viewModel::browseShares,

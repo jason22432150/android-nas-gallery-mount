@@ -80,6 +80,11 @@ class CommandReceiver : BroadcastReceiver() {
                 session.cancelScan()
                 "OK cancel_scan"
             }
+            AppCommands.ACTION_CLEAR_INDEX -> {
+                session.clearMediaIndex()
+                val s = session.state.value
+                "OK clear_index availability=${s.indexAvailability} ${s.statusMessage}"
+            }
             AppCommands.ACTION_DUMP_STATUS -> {
                 dumpStatus(app)
                 "OK status → ${AppCommands.STATUS_RELATIVE}"

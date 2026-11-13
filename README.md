@@ -31,7 +31,8 @@ APK：`app/build/outputs/apk/debug/app-debug.apk`
 3. 填寫 SMB 設定 → 儲存 → 測試連線 → 列出來源  
 4. 建議先用「測試目錄」掛載小資料夾 → 連線並掃描  
 5. 以 Google 相簿開啟測試照片／影片  
-6. 斷線：保留 MediaStore 索引，UI 顯示「檔案不可用」；重掛後可修復  
+6. 斷線：預設保留 MediaStore 索引，UI 顯示「檔案不可用」；重掛後可修復  
+7. 清除媒體索引：手動刪除本掛載路徑的 MediaStore 列，讓 Google 相簿本地清單消失（不刪 SMB 原檔）  
 
 **警告**：若 Google 相簿開啟裝置資料夾備份，掃描後的媒體可能上傳雲端。
 
@@ -46,6 +47,7 @@ chmod +x scripts/adb-cmd.sh
 ./scripts/adb-cmd.sh connect      # 連線並掃描，並輪詢 status
 ./scripts/adb-cmd.sh cancel      # 中斷掃描
 ./scripts/adb-cmd.sh disconnect
+./scripts/adb-cmd.sh clear-index # 清除本掛載點 MediaStore 索引（相簿本地清單）
 ./scripts/adb-cmd.sh logs
 ./scripts/adb-cmd.sh show-logs   # UI 顯示 logs
 ```

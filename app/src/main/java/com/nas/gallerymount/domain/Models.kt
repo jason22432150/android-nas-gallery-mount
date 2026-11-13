@@ -99,12 +99,14 @@ data class MountSnapshot(
 )
 
 /**
- * 斷線後保留的 MediaStore 索引狀態（不刪列）。
+ * MediaStore 索引狀態（斷線預設保留列；可手動清除）。
  */
 enum class IndexAvailability {
     Unknown,
     Available,
     UnavailableAfterDisconnect,
+    /** 已主動清除本掛載路徑的 MediaStore 列 */
+    Cleared,
 }
 
 data class SessionUiState(

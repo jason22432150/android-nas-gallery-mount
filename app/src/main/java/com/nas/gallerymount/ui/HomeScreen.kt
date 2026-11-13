@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -29,6 +30,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -63,6 +65,7 @@ fun HomeScreen(
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
     onCancelScan: () -> Unit,
+    onClearMediaIndex: () -> Unit,
     onToggleLogs: () -> Unit,
     onClearLogs: () -> Unit,
     listShares: suspend () -> Result<List<String>>,
@@ -75,6 +78,7 @@ fun HomeScreen(
     val scanning = state.phase is SessionPhase.Scanning
 
     var showSmbPicker by remember { mutableStateOf(false) }
+    var showClearIndexConfirm by remember { mutableStateOf(false) }
     var mountPickError by remember { mutableStateOf<String?>(null) }
 
     val mountTreeLauncher = rememberLauncherForActivityResult(
@@ -266,6 +270,25 @@ fun HomeScreen(
                 }
             }
 
+            OutlinedButton(
+                onClick = { showClearIndexConfirm = true },
+                enabled = canRootOps &&
+                    !state.mount.fuseMounted &&
+                    !state.mount.bindMounted &&
+                    state.phase !is SessionPhase.Scanning &&
+                    state.phase !is SessionPhase.Mounted &&
+                    state.phase !is SessionPhase.MountingFuse &&
+                    state.phase !is SessionPhase.BindingMediaProvider &&
+                    state.phase !is SessionPhase.Unmounting,
+            ) {
+                Text("清除媒體索引")
+            }
+            Text(
+                "須先斷線。清除後 Google 相簿本地清單應不再顯示此掛載路徑（不刪 SMB 原檔／雲端備份）。" +
+                    "若仍見縮圖，可強制停止 Google 相簿。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
             if (state.busy && !scanning) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -290,7 +313,7 @@ fun HomeScreen(
                 OutlinedButton(onClick = onClearLogs) { Text("清除 Logs") }
             }
             Text(
-                "ADB：./scripts/adb-cmd.sh status｜logs｜connect｜cancel",
+                "ADB：./scripts/adb-cmd.sh status｜logs｜connect｜cancel｜clear-index",
                 style = MaterialTheme.typography.bodySmall,
             )
             if (state.showLogs) {
@@ -339,6 +362,31 @@ fun HomeScreen(
             },
             listShares = listShares,
             listDirectories = listDirectories,
+        )
+    }
+
+    if (showClearIndexConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearIndexConfirm = false },
+            title = { Text("清除媒體索引？") },
+            text = {
+                Text(
+                    "將刪除 MediaStore 中掛載點「${cfg.mountPoint}」底下的照片／影片索引列。" +
+                        "請確認已斷線。不會刪除 SMB 原檔。" +
+                        "Google 相簿若已備份到雲端，雲端副本不受影響。",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearIndexConfirm = false
+                        onClearMediaIndex()
+                    },
+                ) { Text("清除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearIndexConfirm = false }) { Text("取消") }
+            },
         )
     }
 }
@@ -404,6 +452,7 @@ private fun StatusCard(state: SessionUiState) {
     val availabilityText = when (state.indexAvailability) {
         IndexAvailability.Available -> "索引：可用"
         IndexAvailability.UnavailableAfterDisconnect -> "索引：已斷線／檔案不可用（列仍保留）"
+        IndexAvailability.Cleared -> "索引：已清除"
         IndexAvailability.Unknown -> "索引：未知"
     }
     Card(

@@ -62,6 +62,7 @@ case "${cmd}" in
   disconnect) broadcast com.nas.gallerymount.cmd.DISCONNECT ;;
   refresh) broadcast com.nas.gallerymount.cmd.REFRESH ;;
   cancel) broadcast com.nas.gallerymount.cmd.CANCEL_SCAN ;;
+  clear-index) broadcast com.nas.gallerymount.cmd.CLEAR_INDEX ;;
   status)
     broadcast com.nas.gallerymount.cmd.DUMP_STATUS
     echo "--- status ---"
@@ -98,6 +99,7 @@ case "${cmd}" in
   disconnect   斷線
   refresh      重新整理狀態
   cancel       中斷掃描
+  clear-index  清除本掛載點 MediaStore 索引（Google 相簿本地清單）
   status       dump 狀態文字
   logs         dump 並顯示最近 logs
   clear-logs   清除 logs

@@ -302,23 +302,107 @@ class SessionController(
         }
     }
 
+    /**
+     * 清除目前掛載點在 MediaStore 的索引列。
+     * 必須先斷線；Google 相簿本地清單應隨之消失（雲端備份不受影響）。
+     */
+    suspend fun clearMediaIndex() {
+        mutex.withLock {
+            if (_state.value.busy) {
+                _state.update { it.copy(statusMessage = "忙碌中，無法清除索引") }
+                return
+            }
+            val phase = _state.value.phase
+            if (phase is SessionPhase.Scanning || phase is SessionPhase.MountingFuse ||
+                phase is SessionPhase.BindingMediaProvider || phase is SessionPhase.Unmounting ||
+                phase is SessionPhase.Mounted
+            ) {
+                _state.update {
+                    it.copy(statusMessage = "請先斷線後再清除索引（避免刪除掛載中的檔案）")
+                }
+                return
+            }
+            val mountPoint = _state.value.config.mountPoint
+            // 以最新掛載快照為準，不信任過期 UI 狀態
+            val snap = mountManager.refreshSnapshot(_state.value.config)
+            _state.update { it.copy(mount = snap) }
+            if (snap.fuseMounted || snap.bindMounted) {
+                _state.update {
+                    it.copy(
+                        statusMessage = "偵測到仍有掛載（FUSE=${snap.fuseMounted} bind=${snap.bindMounted}），請先斷線再清除索引",
+                    )
+                }
+                return
+            }
+            AppLogger.i("Index", "開始清除 MediaStore 索引 mount=$mountPoint")
+            _state.update {
+                it.copy(busy = true, statusMessage = "清除 MediaStore 索引中…")
+            }
+            try {
+                val result = mediaIndexer.clearIndexedForMount(
+                    mountPoint = mountPoint,
+                    fuseMounted = false,
+                    bindMounted = false,
+                )
+                if (result.ok) {
+                    sessionStore.saveMount(snap, IndexAvailability.Cleared)
+                    AppLogger.i("Index", result.message)
+                    _state.update {
+                        it.copy(
+                            indexAvailability = IndexAvailability.Cleared,
+                            scan = it.scan.copy(indexed = 0, message = result.message),
+                            statusMessage = result.message,
+                        )
+                    }
+                } else {
+                    AppLogger.e("Index", result.message)
+                    _state.update {
+                        it.copy(
+                            scan = it.scan.copy(
+                                indexed = result.after.coerceAtLeast(it.scan.indexed),
+                            ),
+                            statusMessage = result.message,
+                        )
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val msg = "清除索引例外：${e.message ?: e.javaClass.simpleName}"
+                AppLogger.e("Index", msg)
+                _state.update { it.copy(statusMessage = msg) }
+            } finally {
+                _state.update { it.copy(busy = false) }
+            }
+        }
+    }
+
     suspend fun refreshStatus() {
         val config = _state.value.config
         val snap = mountManager.refreshSnapshot(config)
         val prefix = mediaIndexer.relativePathOf(config.mountPoint)
         val readable = snap.fuseMounted
+        val stored = sessionStore.loadIndexAvailability()
+        val count = mediaIndexer.countIndexed(prefix)
         val availability = when {
+            snap.fuseMounted && count > 0 -> IndexAvailability.Available
             snap.fuseMounted -> IndexAvailability.Available
-            sessionStore.loadIndexAvailability() == IndexAvailability.UnavailableAfterDisconnect ->
+            stored == IndexAvailability.Cleared && count <= 0 -> IndexAvailability.Cleared
+            stored == IndexAvailability.UnavailableAfterDisconnect ->
                 IndexAvailability.UnavailableAfterDisconnect
             else -> IndexAvailability.Unknown
+        }
+        val status = when (availability) {
+            IndexAvailability.Cleared ->
+                "MediaStore 索引已清除（$prefix）。｜FUSE=${snap.fuseMounted} bind=${snap.bindMounted}"
+            else -> mediaIndexer.describeAvailability(prefix, readable) +
+                "｜FUSE=${snap.fuseMounted} bind=${snap.bindMounted}"
         }
         _state.update {
             it.copy(
                 mount = snap,
                 indexAvailability = availability,
-                statusMessage = mediaIndexer.describeAvailability(prefix, readable) +
-                    "｜FUSE=${snap.fuseMounted} bind=${snap.bindMounted}",
+                statusMessage = status,
             )
         }
     }

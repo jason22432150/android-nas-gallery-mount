@@ -13,7 +13,8 @@ import java.io.File
 import kotlin.coroutines.resume
 
 /**
- * 有界批次媒體掃描；尊重 .nomedia；不刪除 MediaStore 列。
+ * 有界批次媒體掃描；尊重 .nomedia。
+ * 清除索引僅限本 App 掛載路徑（見 [clearIndexedForMount]），預設斷線不刪列。
  *
  * 檔案發現必須走 Root `find`：App 程序受 Scoped Storage 限制，
  * 對 `/storage/emulated/0/DCIM/...` 的 `File.listFiles()` 常為 Permission denied／空結果。
@@ -38,6 +39,16 @@ class MediaIndexer(
     data class ScanResult(
         val progress: ScanProgress,
         val relativePathPrefix: String,
+    )
+
+    data class ClearIndexResult(
+        val ok: Boolean,
+        val message: String,
+        /** 清除前筆數；查詢失敗為 -1 */
+        val before: Int = -1,
+        /** 清除後筆數；未執行／失敗為 -1 */
+        val after: Int = -1,
+        val deleted: Int = 0,
     )
 
     suspend fun scanMountPoint(
@@ -206,6 +217,144 @@ class MediaIndexer(
             "MediaStore 仍有約 $count 筆索引，檔案目前不可用（已斷線）。重掛後可修復。"
         } else {
             "MediaStore 約 $count 筆索引，檔案應可讀。"
+        }
+    }
+
+    /**
+     * 清除本掛載點在 MediaStore 的圖片／影片列。
+     *
+     * **必須先斷線（FUSE／bind 皆卸載）**：MediaProvider 的 delete 可能連帶刪實體檔；
+     * 卸載後路徑上已無檔案，通常只清 DB 列，不會動到 SMB 原檔。
+     */
+    suspend fun clearIndexedForMount(
+        mountPoint: String,
+        fuseMounted: Boolean,
+        bindMounted: Boolean,
+    ): ClearIndexResult = withContext(Dispatchers.IO) {
+        if (fuseMounted || bindMounted) {
+            return@withContext ClearIndexResult(
+                ok = false,
+                message = "請先斷線（卸載 FUSE／bind）後再清除索引，以免 MediaProvider 嘗試刪除掛載中的檔案。",
+            )
+        }
+        val prefix = relativePathOf(mountPoint)
+        val safety = IndexPathSafety.validateClearableRelativePath(prefix)
+        if (safety != null) {
+            return@withContext ClearIndexResult(false, safety)
+        }
+        val before = countIndexed(prefix)
+        if (before < 0) {
+            return@withContext ClearIndexResult(
+                ok = false,
+                message = "無法查詢 MediaStore（權限不足）。請授予讀取媒體權限後重試。",
+                before = -1,
+                after = -1,
+            )
+        }
+        if (before == 0) {
+            return@withContext ClearIndexResult(
+                ok = true,
+                message = "沒有可清除的索引（relative_path LIKE '$prefix%'）",
+                before = 0,
+                after = 0,
+                deleted = 0,
+            )
+        }
+
+        val like = IndexPathSafety.likeLiteral(prefix)
+        // ESCAPE '\'：路徑中的 _/% 已跳脫（安全檢查亦禁止這些字元）
+        val whereImages = "relative_path LIKE '$like' ESCAPE '\\'"
+        val whereVideos = whereImages
+        val whereFiles =
+            "relative_path LIKE '$like' ESCAPE '\\' AND (mime_type LIKE 'image/%' OR mime_type LIKE 'video/%')"
+
+        val imagesDeleted = deleteViaRoot(
+            uri = "content://media/external/images/media",
+            where = whereImages,
+        )
+        val videosDeleted = deleteViaRoot(
+            uri = "content://media/external/video/media",
+            where = whereVideos,
+        )
+        val filesDeleted = deleteViaRoot(
+            uri = "content://media/external/file",
+            where = whereFiles,
+        )
+        val resolverDeleted = deleteViaResolver(prefix)
+
+        val afterRaw = countIndexed(prefix)
+        if (afterRaw < 0) {
+            return@withContext ClearIndexResult(
+                ok = false,
+                message = "已嘗試清除，但事後無法查詢 MediaStore 確認結果。",
+                before = before,
+                after = -1,
+                deleted = 0,
+            )
+        }
+        val after = afterRaw
+        val deletedApprox = (before - after).coerceAtLeast(0)
+        val rootOk = imagesDeleted.success || videosDeleted.success ||
+            filesDeleted.success || resolverDeleted > 0
+        val detail = buildString {
+            append("前 $before → 後 $after；")
+            append("root img=${fmtExec(imagesDeleted)} vid=${fmtExec(videosDeleted)} ")
+            append("file=${fmtExec(filesDeleted)} resolver=$resolverDeleted")
+        }
+        return@withContext when {
+            after == 0 -> ClearIndexResult(
+                ok = true,
+                message = "已清除 MediaStore 約 $deletedApprox 筆（$prefix）。$detail",
+                before = before,
+                after = 0,
+                deleted = deletedApprox,
+            )
+            deletedApprox > 0 -> ClearIndexResult(
+                ok = false,
+                message = "部分清除：$deletedApprox 筆已刪，仍剩 $after 筆。$detail",
+                before = before,
+                after = after,
+                deleted = deletedApprox,
+            )
+            else -> ClearIndexResult(
+                ok = false,
+                message = "清除失敗（rootOk=$rootOk），索引仍約 $after 筆。$detail",
+                before = before,
+                after = after,
+                deleted = 0,
+            )
+        }
+    }
+
+    private fun fmtExec(r: RootExecutor.ExecResult): String =
+        r.combined().ifBlank { "exit=${r.exitCode}" }
+
+    private suspend fun deleteViaRoot(uri: String, where: String): RootExecutor.ExecResult {
+        return rootExecutor.execute(
+            "content", "delete",
+            "--uri", uri,
+            "--where", where,
+            timeoutMs = 120_000L,
+        )
+    }
+
+    private fun deleteViaResolver(relativePathPrefix: String): Int {
+        val prefix = relativePathPrefix.trimEnd('/') + "/"
+        val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+        val args = arrayOf("$prefix%")
+        var total = 0
+        total += deleteResolverUri(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, selection, args)
+        total += deleteResolverUri(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, selection, args)
+        return total
+    }
+
+    private fun deleteResolverUri(uri: Uri, selection: String, args: Array<String>): Int {
+        return try {
+            appContext.contentResolver.delete(uri, selection, args)
+        } catch (_: SecurityException) {
+            0
+        } catch (_: Exception) {
+            0
         }
     }
 
