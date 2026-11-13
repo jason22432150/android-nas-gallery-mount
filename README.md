@@ -35,6 +35,35 @@ APK：`app/build/outputs/apk/debug/app-debug.apk`
 
 **警告**：若 Google 相簿開啟裝置資料夾備份，掃描後的媒體可能上傳雲端。
 
+## ADB 指令操作（給 AI／自動化，無需截圖點擊）
+
+App 匯出 `CommandReceiver`，對應 UI 按鈕。建議用腳本：
+
+```bash
+chmod +x scripts/adb-cmd.sh
+./scripts/adb-cmd.sh recheck
+./scripts/adb-cmd.sh status
+./scripts/adb-cmd.sh connect      # 連線並掃描，並輪詢 status
+./scripts/adb-cmd.sh cancel      # 中斷掃描
+./scripts/adb-cmd.sh disconnect
+./scripts/adb-cmd.sh logs
+./scripts/adb-cmd.sh show-logs   # UI 顯示 logs
+```
+
+結果檔（可用 `run-as` 或 `su` 讀取）：
+
+- `files/debug/last_result.txt`
+- `files/debug/status.txt`
+- `files/debug/app.log`
+
+或直接：
+
+```bash
+adb shell am broadcast -a com.nas.gallerymount.cmd.CONNECT \
+  -n com.nas.gallerymount/.debug.CommandReceiver
+adb logcat -s NasGallery
+```
+
 ## 架構摘要
 
 - `root/`：`su` 白名單執行、mountinfo 解析  
@@ -43,6 +72,7 @@ APK：`app/build/outputs/apk/debug/app-debug.apk`
 - `media/`：有界 `MediaScannerConnection` 掃描  
 - `domain/`：連線／斷線互斥狀態機  
 - `config/`：加密偏好 + 私有 `rclone.conf`  
+- `debug/`：ADB broadcast 指令與狀態 dump  
 
 ## 驗收檢查清單
 

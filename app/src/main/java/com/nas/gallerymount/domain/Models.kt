@@ -77,8 +77,18 @@ data class ScanProgress(
     val indexed: Int = 0,
     val skipped: Int = 0,
     val failed: Int = 0,
+    /** 0–100；列舉中為 0，提交中依 submitted/discovered */
+    val percent: Int = 0,
+    val cancelled: Boolean = false,
     val message: String = "",
-)
+) {
+    companion object {
+        fun calcPercent(discovered: Int, submitted: Int, failed: Int): Int {
+            if (discovered <= 0) return 0
+            return ((submitted + failed) * 100 / discovered).coerceIn(0, 100)
+        }
+    }
+}
 
 data class MountSnapshot(
     val fuseMounted: Boolean = false,
@@ -109,4 +119,6 @@ data class SessionUiState(
     val mount: MountSnapshot = MountSnapshot(),
     val indexAvailability: IndexAvailability = IndexAvailability.Unknown,
     val busy: Boolean = false,
+    /** 是否在 UI 顯示詳細 logs */
+    val showLogs: Boolean = false,
 )

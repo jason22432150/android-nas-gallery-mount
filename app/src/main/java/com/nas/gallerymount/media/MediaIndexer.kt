@@ -48,11 +48,17 @@ class MediaIndexer(
         allowSubmitting()
         val rootPath = mountPoint.trimEnd('/')
 
-        onProgress(ScanProgress(message = "以 Root 列舉媒體檔（上限 $maxFiles）…"))
+        var cancelled = false
+        onProgress(
+            ScanProgress(
+                percent = 0,
+                message = "以 Root 列舉媒體檔（上限 $maxFiles）…",
+            ),
+        )
         val discoveredPaths = discoverMediaViaRoot(rootPath, maxFiles)
         if (discoveredPaths.isFailure) {
             val err = discoveredPaths.exceptionOrNull()?.message ?: "列舉失敗"
-            val p = ScanProgress(message = err)
+            val p = ScanProgress(message = err, percent = 0)
             onProgress(p)
             return@withContext ScanResult(p, relativePathOf(rootPath))
         }
@@ -65,6 +71,7 @@ class MediaIndexer(
 
         var progress = ScanProgress(
             discovered = discovered,
+            percent = if (discovered == 0) 100 else 0,
             message = if (discovered == 0) {
                 "Root 列舉結果為 0。請確認掛載點有媒體，且 MediaProvider bind 已完成。"
             } else {
@@ -75,8 +82,11 @@ class MediaIndexer(
 
         for (path in files) {
             if (!submitEnabled) {
+                cancelled = true
                 progress = progress.copy(
-                    message = "已停止提交新掃描（Android 可能仍處理已提交項目）",
+                    cancelled = true,
+                    percent = ScanProgress.calcPercent(discovered, submitted, failed),
+                    message = "已中斷掃描（已提交 $submitted／$discovered；Android 可能仍處理已提交項目）",
                 )
                 onProgress(progress)
                 break
@@ -87,18 +97,20 @@ class MediaIndexer(
             } else {
                 failed++
             }
+            val pct = ScanProgress.calcPercent(discovered, submitted, failed)
             progress = ScanProgress(
                 discovered = discovered,
                 submitted = submitted,
                 indexed = indexed,
                 failed = failed,
-                message = "掃描中：$submitted / $discovered",
+                percent = pct,
+                message = "掃描中：$submitted / $discovered（$pct%）",
             )
             onProgress(progress)
         }
 
-        // 目錄級掃描備援（部分 ROM 對整樹較有效）
-        if (discovered > 0) {
+        // 目錄級掃描備援（中斷時略過）
+        if (discovered > 0 && !cancelled) {
             rootExecutor.execute(
                 "content", "call",
                 "--uri", "content://media",
@@ -115,12 +127,22 @@ class MediaIndexer(
         } else {
             ""
         }
+        val endPct = if (cancelled) {
+            ScanProgress.calcPercent(discovered, submitted, failed)
+        } else {
+            100
+        }
         progress = ScanProgress(
             discovered = discovered,
             submitted = submitted,
             indexed = indexed,
             failed = failed,
-            message = "掃描結束：MediaStore 約 $indexed 筆（relative_path LIKE '$prefix%'）$cappedNote",
+            percent = endPct,
+            cancelled = cancelled,
+            message = buildString {
+                if (cancelled) append("掃描已中斷。") else append("掃描結束。")
+                append("MediaStore 約 $indexed 筆（relative_path LIKE '$prefix%'）$cappedNote")
+            },
         )
         onProgress(progress)
         ScanResult(progress, prefix)

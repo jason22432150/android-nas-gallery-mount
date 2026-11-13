@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,6 +23,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -36,9 +38,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.nas.gallerymount.domain.IndexAvailability
 import com.nas.gallerymount.domain.SessionPhase
 import com.nas.gallerymount.domain.SessionUiState
@@ -49,6 +53,7 @@ import com.nas.gallerymount.util.PrimaryStoragePaths
 @Composable
 fun HomeScreen(
     state: SessionUiState,
+    logs: List<String>,
     onConfigChange: (SmbConfig) -> Unit,
     onSave: () -> Unit,
     onRecheckRoot: () -> Unit,
@@ -57,6 +62,9 @@ fun HomeScreen(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
+    onCancelScan: () -> Unit,
+    onToggleLogs: () -> Unit,
+    onClearLogs: () -> Unit,
     listShares: suspend () -> Result<List<String>>,
     listDirectories: suspend (share: String, subPath: String) -> Result<List<String>>,
 ) {
@@ -64,6 +72,7 @@ fun HomeScreen(
     val rootOk = state.root.available
     val canRootOps = rootOk && !state.busy
     val context = LocalContext.current
+    val scanning = state.phase is SessionPhase.Scanning
 
     var showSmbPicker by remember { mutableStateOf(false) }
     var mountPickError by remember { mutableStateOf<String?>(null) }
@@ -102,6 +111,15 @@ fun HomeScreen(
         ) {
             StatusCard(state)
 
+            if (scanning || state.scan.percent > 0) {
+                ScanProgressSection(
+                    percent = state.scan.percent,
+                    message = state.scan.message,
+                    scanning = scanning,
+                    onCancel = onCancelScan,
+                )
+            }
+
             Text("Root 授權", style = MaterialTheme.typography.titleMedium)
             Text(state.root.message)
             if (state.root.uidLine.isNotBlank()) {
@@ -113,7 +131,7 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            OutlinedButton(onClick = onRecheckRoot, enabled = !state.busy) {
+            OutlinedButton(onClick = onRecheckRoot, enabled = !state.busy || scanning) {
                 Text("重新檢查 Root / 工具 / 裝置")
             }
 
@@ -158,7 +176,6 @@ fun HomeScreen(
                 singleLine = true,
             )
 
-            // 共享 + 子資料夾：以瀏覽選擇，不可手打
             PathSelectRow(
                 label = "SMB 來源資料夾",
                 value = when {
@@ -167,7 +184,7 @@ fun HomeScreen(
                     else -> "${cfg.shareName}/${cfg.subPath}"
                 },
                 buttonText = "選擇資料夾",
-                enabled = canRootOps,
+                enabled = canRootOps || scanning,
                 onClick = { showSmbPicker = true },
             )
             Text(
@@ -175,15 +192,13 @@ fun HomeScreen(
                 style = MaterialTheme.typography.bodySmall,
             )
 
-            // 手機掛載位置：系統資料夾選擇器
             PathSelectRow(
                 label = "手機掛載位置",
                 value = cfg.mountPoint.ifBlank { "尚未選擇" },
                 buttonText = "選擇資料夾",
-                enabled = !state.busy,
+                enabled = !state.busy || scanning,
                 onClick = {
                     mountPickError = null
-                    // 開啟系統資料夾選擇器，預設落在 Pictures
                     val initial = DocumentsContract.buildTreeDocumentUri(
                         "com.android.externalstorage.documents",
                         "primary:Pictures",
@@ -236,22 +251,22 @@ fun HomeScreen(
                 Button(
                     onClick = onConnect,
                     enabled = canRootOps && state.phase !is SessionPhase.Mounted &&
-                        state.phase !is SessionPhase.Unmounting,
+                        state.phase !is SessionPhase.Unmounting &&
+                        state.phase !is SessionPhase.Scanning,
                 ) { Text("連線並掃描") }
                 Button(
                     onClick = onDisconnect,
-                    enabled = !state.busy && (
-                        state.phase is SessionPhase.Mounted ||
-                            state.mount.fuseMounted ||
-                            state.mount.bindMounted
-                        ),
+                    enabled = state.phase is SessionPhase.Mounted ||
+                        state.phase is SessionPhase.Scanning ||
+                        state.mount.fuseMounted ||
+                        state.mount.bindMounted,
                 ) { Text("斷線") }
-                OutlinedButton(onClick = onRefresh, enabled = !state.busy) {
+                OutlinedButton(onClick = onRefresh, enabled = !state.busy || scanning) {
                     Text("重新整理狀態")
                 }
             }
 
-            if (state.busy) {
+            if (state.busy && !scanning) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -266,6 +281,49 @@ fun HomeScreen(
                     "若 Google 相簿開啟備份，媒體可能上傳雲端。",
                 style = MaterialTheme.typography.bodySmall,
             )
+
+            Text("診斷 Logs", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onToggleLogs) {
+                    Text(if (state.showLogs) "隱藏 Logs" else "顯示 Logs")
+                }
+                OutlinedButton(onClick = onClearLogs) { Text("清除 Logs") }
+            }
+            Text(
+                "ADB：./scripts/adb-cmd.sh status｜logs｜connect｜cancel",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (state.showLogs) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 320.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                ) {
+                    Column(
+                        Modifier
+                            .padding(8.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        if (logs.isEmpty()) {
+                            Text("（尚無 logs）", style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            logs.takeLast(200).forEach { line ->
+                                Text(
+                                    line,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -282,6 +340,38 @@ fun HomeScreen(
             listShares = listShares,
             listDirectories = listDirectories,
         )
+    }
+}
+
+@Composable
+private fun ScanProgressSection(
+    percent: Int,
+    message: String,
+    scanning: Boolean,
+    onCancel: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ),
+    ) {
+        Column(
+            Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("掃描進度：$percent%", style = MaterialTheme.typography.titleSmall)
+            LinearProgressIndicator(
+                progress = { percent / 100f },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(message, style = MaterialTheme.typography.bodySmall)
+            if (scanning) {
+                Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                    Text("中斷掃描")
+                }
+            }
+        }
     }
 }
 
@@ -336,8 +426,9 @@ private fun StatusCard(state: SessionUiState) {
             )
             Text(availabilityText)
             Text(
-                "掃描：發現 ${state.scan.discovered}／提交 ${state.scan.submitted}／" +
-                    "索引 ${state.scan.indexed}／略過 ${state.scan.skipped}／失敗 ${state.scan.failed}",
+                "掃描：${state.scan.percent}%｜發現 ${state.scan.discovered}／提交 ${state.scan.submitted}／" +
+                    "索引 ${state.scan.indexed}／失敗 ${state.scan.failed}" +
+                    if (state.scan.cancelled) "｜已中斷" else "",
             )
         }
     }

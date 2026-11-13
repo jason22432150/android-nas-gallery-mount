@@ -33,8 +33,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             NasGalleryTheme {
                 val state by viewModel.state.collectAsStateWithLifecycle()
+                val logs by viewModel.logs.collectAsStateWithLifecycle()
                 HomeScreen(
                     state = state,
+                    logs = logs,
                     onConfigChange = viewModel::onConfigChange,
                     onSave = viewModel::saveConfig,
                     onRecheckRoot = viewModel::recheckRoot,
@@ -43,6 +45,9 @@ class MainActivity : ComponentActivity() {
                     onConnect = viewModel::connect,
                     onDisconnect = viewModel::disconnect,
                     onRefresh = viewModel::refreshStatus,
+                    onCancelScan = viewModel::cancelScan,
+                    onToggleLogs = viewModel::toggleShowLogs,
+                    onClearLogs = viewModel::clearLogs,
                     listShares = viewModel::browseShares,
                     listDirectories = viewModel::browseDirectories,
                 )

@@ -8,6 +8,7 @@ import com.nas.gallerymount.mount.SmbBrowser
 import com.nas.gallerymount.mount.ToolLocator
 import com.nas.gallerymount.probe.DeviceProbe
 import com.nas.gallerymount.root.RootExecutor
+import com.nas.gallerymount.util.AppLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,13 +41,41 @@ class SessionController(
 
     fun updateConfig(config: SmbConfig) {
         _state.update { it.copy(config = config) }
+        AppLogger.d(
+            "Config",
+            "更新設定 host=${config.host} share=${config.shareName} " +
+                "sub=${config.subPath} mount=${config.mountPoint}",
+        )
+    }
+
+    fun setShowLogs(show: Boolean) {
+        _state.update { it.copy(showLogs = show) }
+        AppLogger.i("UI", "顯示 logs=$show")
+    }
+
+    fun toggleShowLogs() {
+        setShowLogs(!_state.value.showLogs)
+    }
+
+    /** 中斷進行中的媒體掃描（已掛載可保留；僅停止提交新掃描）。 */
+    fun cancelScan() {
+        AppLogger.w("Scan", "收到中斷掃描請求")
+        mediaIndexer.stopSubmitting()
+        _state.update {
+            it.copy(
+                statusMessage = "正在中斷掃描…",
+                scan = it.scan.copy(cancelled = true, message = "正在中斷掃描…"),
+            )
+        }
     }
 
     fun persistConfig() {
         try {
             configStore.save(_state.value.config)
+            AppLogger.i("Config", "設定已儲存 mount=${_state.value.config.mountPoint}")
             _state.update { it.copy(statusMessage = "設定已儲存（rclone 密碼已 obscure）") }
         } catch (e: Exception) {
+            AppLogger.e("Config", "儲存失敗：${e.message}")
             _state.update {
                 it.copy(statusMessage = "儲存失敗：${e.message ?: e.javaClass.simpleName}")
             }
@@ -54,6 +83,7 @@ class SessionController(
     }
 
     suspend fun refreshRootAndTools() {
+        AppLogger.i("Root", "開始檢查 Root／工具／裝置")
         _state.update {
             it.copy(phase = SessionPhase.CheckingRoot, busy = true, statusMessage = "檢查 Root…")
         }
@@ -78,6 +108,15 @@ class SessionController(
         } else {
             ""
         }
+        val statusMessage = listOf(
+            when (phase) {
+                is SessionPhase.Ready -> "就緒"
+                is SessionPhase.Failed -> phase.reason
+                else -> "檢查完成"
+            },
+            encryptWarn,
+        ).filter { msg -> msg.isNotBlank() }.joinToString(" ")
+        AppLogger.i("Root", "檢查結果 phase=$phase root=${root.available} tools=${tools.ok}")
         _state.update {
             it.copy(
                 phase = phase,
@@ -85,14 +124,7 @@ class SessionController(
                 tools = tools,
                 probe = probe,
                 busy = false,
-                statusMessage = listOf(
-                    when (phase) {
-                        is SessionPhase.Ready -> "就緒"
-                        is SessionPhase.Failed -> phase.reason
-                        else -> it.statusMessage
-                    },
-                    encryptWarn,
-                ).filter { msg -> msg.isNotBlank() }.joinToString(" "),
+                statusMessage = statusMessage,
             )
         }
     }
@@ -103,10 +135,12 @@ class SessionController(
             _state.update { it.copy(statusMessage = "請先完成 Root 授權") }
             return
         }
+        AppLogger.i("SMB", "測試連線 host=${_state.value.config.host}")
         _state.update {
             it.copy(phase = SessionPhase.Testing, busy = true, statusMessage = "測試 SMB 連線…")
         }
         val result = smbBrowser.testConnection(_state.value.config)
+        AppLogger.i("SMB", "測連線結果 ok=${result.ok} ${result.message}")
         _state.update {
             it.copy(
                 phase = if (result.ok) SessionPhase.Ready else SessionPhase.Failed("Testing", result.message),
@@ -132,102 +166,139 @@ class SessionController(
         }
     }
 
-    suspend fun connectAndScan() = mutex.withLock {
-        if (_state.value.busy) return
-        if (!_state.value.root.available || !_state.value.tools.ok) {
-            _state.update { it.copy(statusMessage = "Root 或工具未就緒") }
-            return
-        }
-        val config = _state.value.config
-        configStore.save(config)
-
-        // FUSE
-        _state.update {
-            it.copy(phase = SessionPhase.MountingFuse, busy = true, statusMessage = "掛載 rclone FUSE…")
-        }
-        val fuse = mountManager.mountFuse(config)
-        if (!fuse.ok) {
-            fail("MountingFuse", fuse.message)
-            return
-        }
-        _state.update { it.copy(mount = fuse.snapshot, statusMessage = fuse.message) }
-
-        // Bind（若啟用 Google 相簿整合）
-        var snapshot = fuse.snapshot
-        if (config.enableGooglePhotosIntegration) {
-            _state.update {
-                it.copy(
-                    phase = SessionPhase.BindingMediaProvider,
-                    statusMessage = "對齊 MediaProvider 掛載視圖…",
-                )
-            }
-            val bind = mountManager.bindMediaProvider(config)
-            if (!bind.ok) {
-                // 盡力卸載剛建立的 FUSE
-                mountManager.unmountAll(config, null)
-                fail("BindingMediaProvider", bind.message)
+    suspend fun connectAndScan() {
+        val snapshot: MountSnapshot
+        val config: SmbConfig
+        mutex.withLock {
+            if (_state.value.busy) return
+            if (!_state.value.root.available || !_state.value.tools.ok) {
+                _state.update { it.copy(statusMessage = "Root 或工具未就緒") }
                 return
             }
-            snapshot = bind.snapshot
-            _state.update { it.copy(mount = snapshot, statusMessage = bind.message) }
+            config = _state.value.config
+            AppLogger.i(
+                "Session",
+                "連線並掃描 remote=${config.remotePath()} mount=${config.mountPoint}",
+            )
+            configStore.save(config)
+
+            // FUSE
+            _state.update {
+                it.copy(phase = SessionPhase.MountingFuse, busy = true, statusMessage = "掛載 rclone FUSE…")
+            }
+            val fuse = mountManager.mountFuse(config)
+            if (!fuse.ok) {
+                AppLogger.e("Mount", fuse.message)
+                fail("MountingFuse", fuse.message)
+                return
+            }
+            AppLogger.i("Mount", fuse.message)
+            _state.update { it.copy(mount = fuse.snapshot, statusMessage = fuse.message) }
+
+            // Bind（若啟用 Google 相簿整合）
+            var snap = fuse.snapshot
+            if (config.enableGooglePhotosIntegration) {
+                _state.update {
+                    it.copy(
+                        phase = SessionPhase.BindingMediaProvider,
+                        statusMessage = "對齊 MediaProvider 掛載視圖…",
+                    )
+                }
+                val bind = mountManager.bindMediaProvider(config)
+                if (!bind.ok) {
+                    AppLogger.e("Bind", bind.message)
+                    mountManager.unmountAll(config, null)
+                    fail("BindingMediaProvider", bind.message)
+                    return
+                }
+                AppLogger.i("Bind", bind.message)
+                snap = bind.snapshot
+                _state.update { it.copy(mount = snap, statusMessage = bind.message) }
+            }
+            snapshot = snap
+
+            // 掃描在鎖外執行，才能即時 cancel／disconnect
+            mediaIndexer.allowSubmitting()
+            _state.update {
+                it.copy(
+                    phase = SessionPhase.Scanning,
+                    busy = true,
+                    statusMessage = buildScanWarning(config),
+                    indexAvailability = IndexAvailability.Available,
+                    scan = ScanProgress(message = "準備掃描…", percent = 0),
+                )
+            }
         }
 
-        // 掃描
-        _state.update {
-            it.copy(
-                phase = SessionPhase.Scanning,
-                statusMessage = buildScanWarning(config),
-                indexAvailability = IndexAvailability.Available,
-            )
-        }
+        AppLogger.i("Scan", "開始掃描 ${config.mountPoint}")
         val scan = mediaIndexer.scanMountPoint(config.mountPoint) { progress ->
             _state.update { s -> s.copy(scan = progress, statusMessage = progress.message) }
         }
+        AppLogger.i(
+            "Scan",
+            "結束 percent=${scan.progress.percent} cancelled=${scan.progress.cancelled} " +
+                "indexed=${scan.progress.indexed}",
+        )
 
-        sessionStore.saveMount(snapshot, IndexAvailability.Available)
-        _state.update {
-            it.copy(
-                phase = SessionPhase.Mounted,
-                busy = false,
-                mount = snapshot,
-                scan = scan.progress,
-                indexAvailability = IndexAvailability.Available,
-                statusMessage = "已掛載。" + scan.progress.message,
-            )
+        mutex.withLock {
+            // 若掃描期間已開始斷線，勿覆寫 Unmounting／Idle
+            if (_state.value.phase is SessionPhase.Unmounting ||
+                _state.value.phase is SessionPhase.Idle
+            ) {
+                AppLogger.i("Scan", "掃描結束但 Session 已在斷線流程，略過 Mounted 狀態")
+                return
+            }
+            sessionStore.saveMount(snapshot, IndexAvailability.Available)
+            _state.update {
+                it.copy(
+                    phase = SessionPhase.Mounted,
+                    busy = false,
+                    mount = snapshot,
+                    scan = scan.progress,
+                    indexAvailability = IndexAvailability.Available,
+                    statusMessage = "已掛載。" + scan.progress.message,
+                )
+            }
         }
     }
 
-    suspend fun disconnect() = mutex.withLock {
-        if (_state.value.busy) return
-        _state.update {
-            it.copy(phase = SessionPhase.Unmounting, busy = true, statusMessage = "斷線中…")
-        }
+    suspend fun disconnect() {
+        // 先停掃描，再搶鎖卸載
         mediaIndexer.stopSubmitting()
-        val config = _state.value.config
-        val result = mountManager.unmountAll(config, _state.value.mount.mediaProviderPid)
-        if (!result.ok) {
+        mutex.withLock {
+            if (_state.value.phase is SessionPhase.Unmounting) return
+            AppLogger.i("Session", "斷線開始")
+            _state.update {
+                it.copy(phase = SessionPhase.Unmounting, busy = true, statusMessage = "斷線中…")
+            }
+            val config = _state.value.config
+            val result = mountManager.unmountAll(config, _state.value.mount.mediaProviderPid)
+            if (!result.ok) {
+                AppLogger.e("Session", "斷線失敗：${result.message}")
+                _state.update {
+                    it.copy(
+                        phase = SessionPhase.Failed("Unmounting", result.message),
+                        busy = false,
+                        mount = result.snapshot,
+                        statusMessage = result.message,
+                    )
+                }
+                return
+            }
+            val prefix = mediaIndexer.relativePathOf(config.mountPoint)
+            val note = mediaIndexer.describeAvailability(prefix, filesExpectedReadable = false)
+            sessionStore.saveMount(result.snapshot, IndexAvailability.UnavailableAfterDisconnect)
+            sessionStore.clearActiveFlags()
+            AppLogger.i("Session", "已斷線 $note")
             _state.update {
                 it.copy(
-                    phase = SessionPhase.Failed("Unmounting", result.message),
+                    phase = SessionPhase.Idle,
                     busy = false,
                     mount = result.snapshot,
-                    statusMessage = result.message,
+                    indexAvailability = IndexAvailability.UnavailableAfterDisconnect,
+                    statusMessage = "已斷線。$note",
                 )
             }
-            return
-        }
-        val prefix = mediaIndexer.relativePathOf(config.mountPoint)
-        val note = mediaIndexer.describeAvailability(prefix, filesExpectedReadable = false)
-        sessionStore.saveMount(result.snapshot, IndexAvailability.UnavailableAfterDisconnect)
-        sessionStore.clearActiveFlags()
-        _state.update {
-            it.copy(
-                phase = SessionPhase.Idle,
-                busy = false,
-                mount = result.snapshot,
-                indexAvailability = IndexAvailability.UnavailableAfterDisconnect,
-                statusMessage = "已斷線。$note",
-            )
         }
     }
 
@@ -279,6 +350,7 @@ class SessionController(
     }
 
     private fun fail(stage: String, reason: String) {
+        AppLogger.e("Session", "失敗[$stage] $reason")
         _state.update {
             it.copy(
                 phase = SessionPhase.Failed(stage, reason),
