@@ -74,21 +74,31 @@ class MountManager(
             return ActionResult(false, "無法建立掛載點：${mkdir.combined()}")
         }
 
-        // PATH／LD_LIBRARY_PATH 指向 jniLibs，讓 rclone 找得到 fusermount3 與 libfuse3
-        val binDir = File(fuseBin).parent
-        val pathEnv = "$binDir:/system/bin:/system/xbin"
-        val mountCmd = arrayOf(
-            "/system/bin/env",
-            "PATH=$pathEnv",
-            "LD_LIBRARY_PATH=$binDir",
-            rclone, "mount", remote, mountPoint,
-            "--config", conf,
-            "--read-only",
-            "--allow-other",
-            "--daemon",
-            "--daemon-wait", "20s",
+        // Android toybox 的 env 無法正確帶多個 VAR= 後接命令，會誤呼叫系統 mount。
+        // 改用 sh -c + export，確保執行的是 librclone.so。
+        val binDir = File(fuseBin).parent ?: return ActionResult(false, "工具目錄無效")
+        val mountScript = buildString {
+            append("export PATH=")
+            append(RootExecutor.shellQuote("$binDir:/system/bin:/system/xbin"))
+            append("; export LD_LIBRARY_PATH=")
+            append(RootExecutor.shellQuote(binDir))
+            append("; export HOME=")
+            append(RootExecutor.shellQuote(File(conf).parent ?: "/data/local/tmp"))
+            append("; exec ")
+            val args = listOf(
+                rclone, "mount", remote, mountPoint,
+                "--config", conf,
+                "--read-only",
+                "--allow-other",
+                "--daemon",
+                "--daemon-wait", "20s",
+            )
+            append(args.joinToString(" ") { RootExecutor.shellQuote(it) })
+        }
+        val mount = rootExecutor.executeInGlobalMountNs(
+            "/system/bin/sh", "-c", mountScript,
+            timeoutMs = 60_000L,
         )
-        val mount = rootExecutor.executeInGlobalMountNs(*mountCmd, timeoutMs = 60_000L)
         if (!mount.success) {
             return ActionResult(false, "rclone mount 失敗：${mount.combined()}")
         }
@@ -222,11 +232,17 @@ class MountManager(
         // 2) fusermount3 -u
         val fuseBin = toolLocator.fusermountPath()
         if (fuseBin != null) {
-            val libDir = File(fuseBin).parent
+            val libDir = File(fuseBin).parent ?: "/system/bin"
+            val umountScript = buildString {
+                append("export LD_LIBRARY_PATH=")
+                append(RootExecutor.shellQuote(libDir))
+                append("; exec ")
+                append(RootExecutor.shellQuote(fuseBin))
+                append(" -u ")
+                append(RootExecutor.shellQuote(mountPoint))
+            }
             val umountFuse = rootExecutor.executeInGlobalMountNs(
-                "/system/bin/env",
-                "LD_LIBRARY_PATH=$libDir",
-                fuseBin, "-u", mountPoint,
+                "/system/bin/sh", "-c", umountScript,
                 timeoutMs = 30_000L,
             )
             if (!umountFuse.success) {
@@ -302,7 +318,8 @@ class MountManager(
     }
 
     private suspend fun readSelfMount(mountPoint: String) =
-        rootExecutor.execute("/system/bin/cat", "/proc/self/mountinfo").let { result ->
+        // 掛載以 su -M 建立，查詢也走全域 mount ns，避免誤判未掛載
+        rootExecutor.executeInGlobalMountNs("/system/bin/cat", "/proc/self/mountinfo").let { result ->
             if (!result.success) null
             else MountInfoParser.findExactMountPoint(result.stdout, mountPoint)
         }
